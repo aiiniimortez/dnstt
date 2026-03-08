@@ -166,7 +166,7 @@ def main():
 
     default_proxied = (prox_choice == "y")
 
-    candidates = random.choices(WORD_LIST, k=2*n)
+    candidates = WORD_LIST
 
     created_ns = []
     created_pairs = 0
