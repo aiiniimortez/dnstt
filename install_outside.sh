@@ -79,17 +79,14 @@ echo
 while true; do
 read -p "Enter UUID: " uuid
 
-```
-if [[ "$uuid" == "exit" ]]; then
-    break
+if [ "$uuid" = "exit" ]; then
+break
 fi
 
-if [[ -n "$uuid" ]]; then
-    echo "$uuid" >> /etc/dn_monitor_env
-    echo "UUID added."
+if [ -n "$uuid" ]; then
+echo "$uuid" >> /etc/dn_monitor_env
+echo "UUID added."
 fi
-```
-
 done
 
 echo
