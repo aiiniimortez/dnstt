@@ -1,23 +1,11 @@
 #!/usr/bin/env python3
 
 import requests
-import sys
 import getpass
+import sys
+import ipaddress
 
 API_BASE = "https://api.cloudflare.com/client/v4"
-
-WORD_LIST = [
-"behaviour","history","picture","monster","network","science","project","example",
-"country","quantum","virtual","library","factory","process","control","message",
-"feature","journey","problem","product","natural","freedom","capital","energy",
-"pattern","resource","traffic","venture","dynamic","battery","dialogue","shelter",
-"language","strategy","purpose","interface","security","release","command","context",
-"support","document","solution","triangle","balance","distance","function","delivery",
-"economy","priority","announce","campaign","category","computer","developer",
-"mountain","question","research","snapshot","umbrella","constant","instance","decoder",
-"terminal","service","boundary","velocity","horizon","duration","entropy","elegance",
-"scenario","synergy","optimize","resonance","archive","fortune","harmonic","inspire"
-]
 
 
 def headers(token):
@@ -29,124 +17,243 @@ def headers(token):
 
 def list_zones(token):
     r = requests.get(f"{API_BASE}/zones", headers=headers(token))
+    r.raise_for_status()
     return r.json()["result"]
 
 
 def choose_zone(zones):
+
     print("\nAvailable zones:")
-    for i,z in enumerate(zones):
+
+    for i, z in enumerate(zones):
         print(f"{i+1}. {z['name']}")
 
     while True:
+
         c = input("Select domain number: ").strip()
+
         if c.isdigit() and 1 <= int(c) <= len(zones):
             return zones[int(c)-1]
 
-
-def get_dns_records(token, zone_id, rtype=None, name=None):
-
-    params={}
-
-    if rtype:
-        params["type"]=rtype
-    if name:
-        params["name"]=name
-
-    r=requests.get(
-        f"{API_BASE}/zones/{zone_id}/dns_records",
-        headers=headers(token),
-        params=params
-    )
-
-    return r.json()["result"]
+        print("Invalid selection.")
 
 
-def update_record(token, zone_id, record_id, name, ip):
+def get_all_dns_records(token, zone_id):
 
-    payload={
-        "type":"A",
-        "name":name,
-        "content":ip,
-        "ttl":1,
-        "proxied":False
+    records = []
+    page = 1
+    per_page = 100
+
+    while True:
+
+        r = requests.get(
+            f"{API_BASE}/zones/{zone_id}/dns_records",
+            headers=headers(token),
+            params={"page": page, "per_page": per_page}
+        )
+
+        r.raise_for_status()
+
+        data = r.json()
+
+        records.extend(data["result"])
+
+        info = data.get("result_info")
+
+        if not info:
+            break
+
+        if page >= info.get("total_pages", 1):
+            break
+
+        page += 1
+
+    return records
+
+
+def update_record(token, zone_id, record_id, name, ip, ttl=1, proxied=False):
+
+    payload = {
+        "type": "A",
+        "name": name,
+        "content": ip,
+        "ttl": ttl,
+        "proxied": proxied
     }
 
-    r=requests.put(
+    r = requests.put(
         f"{API_BASE}/zones/{zone_id}/dns_records/{record_id}",
         headers=headers(token),
         json=payload
     )
 
-    return r.ok
+    try:
+        r.raise_for_status()
+    except Exception:
+        return False
+
+    return True
+
+
+def is_valid_ipv4(ip):
+
+    try:
+        ipaddress.IPv4Address(ip)
+        return True
+    except Exception:
+        return False
 
 
 def main():
 
-    print("Cloudflare NS scanner\n")
+    print("Cloudflare NS+A batch scanner\n")
 
-    token=getpass.getpass("Enter API Token: ")
+    token = getpass.getpass("Enter API Token: ").strip()
 
-    zones=list_zones(token)
+    zones = list_zones(token)
 
-    zone=choose_zone(zones)
+    zone = choose_zone(zones)
 
-    domain=zone["name"]
-    zone_id=zone["id"]
+    domain = zone["name"]
+    zone_id = zone["id"]
 
     print(f"\nUsing domain: {domain}\n")
 
-    found_ns=[]
+    print("Fetching all DNS records...\n")
 
-    for word in WORD_LIST:
+    records = get_all_dns_records(token, zone_id)
 
-        ns_name=f"{word}.{domain}"
+    a_records = {}
+    ns_records = []
 
-        records=get_dns_records(token,zone_id,"NS",ns_name)
+    for r in records:
 
-        if records:
-            found_ns.append(word)
-            print(ns_name)
+        if r["type"] == "A":
+            a_records.setdefault(r["name"], []).append(r)
 
-    if not found_ns:
-        print("\nNo matching NS records found.")
-        sys.exit()
+        if r["type"] == "NS":
+            ns_records.append(r)
 
-    print(f"\nFound {len(found_ns)} matching NS records.")
+    found_pairs = []
 
-    change=input("\nDo you want to change the IP of their A records? (y/N): ").lower()
+    for ns in ns_records:
 
-    if change!="y":
-        return
+        ns_name = ns["name"]
 
-    new_ip=input("Enter new IP: ").strip()
-
-    updated=0
-
-    for word in found_ns:
-
-        a_name=f"{word}ir.{domain}"
-
-        a_records=get_dns_records(token,zone_id,"A",a_name)
-
-        if not a_records:
+        if not ns_name.endswith("." + domain):
             continue
 
-        rec=a_records[0]
+        sub = ns_name.replace("." + domain, "")
 
-        ok=update_record(
+        if not sub:
+            continue
+
+        a_name = f"{sub}ir.{domain}"
+
+        a_recs = a_records.get(a_name, [])
+
+        if a_recs:
+
+            ips = [r["content"] for r in a_recs]
+
+            print(f"{ns_name} -> {a_name} -> {', '.join(ips)}")
+
+            for rec in a_recs:
+
+                found_pairs.append({
+                    "ns": ns_name,
+                    "record": rec
+                })
+
+    if not found_pairs:
+        print("\nNo matching NS records found.")
+        return
+
+    print(f"\nFound {len(found_pairs)} matching records.\n")
+
+    change = input("Do you want to change the IP of their A records? (y/N): ").lower()
+
+    if change != "y":
+        return
+
+    all_records = [x["record"] for x in found_pairs]
+
+    unique_ips = sorted(set(rec["content"] for rec in all_records))
+
+    print("\nAvailable IPs found:\n")
+
+    for i, ip in enumerate(unique_ips, 1):
+        print(f"{i}. {ip}")
+
+    while True:
+
+        choice = input("\nSelect the IP number you want to replace: ").strip()
+
+        if choice.isdigit() and 1 <= int(choice) <= len(unique_ips):
+            old_ip = unique_ips[int(choice)-1]
+            break
+
+        print("Invalid selection.")
+
+    recs_with_old = [x for x in found_pairs if x["record"]["content"] == old_ip]
+
+    max_available = len(recs_with_old)
+
+    print(f"\nFound {max_available} records with IP {old_ip}")
+
+    while True:
+
+        num = input(f"How many records do you want to change? (1-{max_available}): ").strip()
+
+        if num.isdigit() and 1 <= int(num) <= max_available:
+            num = int(num)
+            break
+
+        print("Invalid number.")
+
+    while True:
+
+        new_ip = input("Enter NEW IP: ").strip()
+
+        if is_valid_ipv4(new_ip):
+            break
+
+        print("Invalid IPv4 format.")
+
+    updated = 0
+    changed_ns = []
+
+    print("\nUpdating records...\n")
+
+    for item in recs_with_old[:num]:
+
+        rec = item["record"]
+        ns_name = item["ns"]
+
+        ok = update_record(
             token,
             zone_id,
             rec["id"],
-            a_name,
-            new_ip
+            rec["name"],
+            new_ip,
+            rec.get("ttl", 1),
+            rec.get("proxied", False)
         )
 
         if ok:
-            updated+=1
-            print(f"Updated {a_name}")
+            updated += 1
+            changed_ns.append(ns_name)
+            print(f"Updated {rec['name']} -> {new_ip}")
 
-    print(f"\nDone. Updated {updated} A records.")
+    print(f"\nDone. Updated {updated} records.\n")
+
+    if changed_ns:
+
+        print("NS records affected:\n")
+
+        for ns in changed_ns:
+            print(ns)
 
 
-if __name__=="__main__":
+if __name__ == "__main__":
     main()
