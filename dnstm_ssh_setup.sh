@@ -8,7 +8,7 @@ USER_PREFIX="user_ssh"
 USER_SHELL="/bin/bash"
 TUNNEL_TRANSPORT="dnstt"
 TUNNEL_BACKEND="ssh"
-MTU=800
+MTU=600
 
 if [ "$(id -u)" -ne 0 ]; then
   echo "This script must be run as root."
