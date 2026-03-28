@@ -30,8 +30,8 @@ from telegram.ext import (
     filters,
 )
 
-TELEGRAM_TOKEN = "8717574663:AAF75uq7VernT0DAEtHRmRhLciEDrrYHxAk"
-ALLOWED_USER_ID = 1188689027
+TELEGRAM_TOKEN = ""
+ALLOWED_USER_ID = 111111
 
 # -----------------------
 # Config / Constants
