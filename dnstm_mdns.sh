@@ -75,9 +75,21 @@ ensure_binary() {
   chmod +x "$DNSTM_BIN"
 }
 
+is_dnstm_installed() {
+  id dnstm >/dev/null 2>&1 || return 1
+  systemctl cat dnstm-dnsrouter.service >/dev/null 2>&1 || return 1
+  "$DNSTM_BIN" router status >/dev/null 2>&1 || return 1
+  return 0
+}
+
 ensure_install() {
+  if is_dnstm_installed; then
+    echo "=> dnstm already installed; skipping install."
+    return
+  fi
+
   echo "=> Running dnstm install ..."
-  "$DNSTM_BIN" install
+  "$DNSTM_BIN" install --mode multi --force
 }
 
 set_router_multi() {
