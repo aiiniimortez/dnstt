@@ -31,6 +31,99 @@ version_ge() {
   [ "$(printf '%s\n' "$2" "$1" | sort -V | head -n1)" = "$2" ]
 }
 
+manage_swap() {
+  local swap_path="${1:-/swapfile}"
+  local current_bytes current_mb new_mb
+
+  # Must run as root
+  if [[ $EUID -ne 0 ]]; then
+    echo "This function must be run as root."
+    return 1
+  fi
+
+  # Get total active swap (bytes)
+  current_bytes=$(
+    swapon --noheadings --bytes --show=SIZE 2>/dev/null | awk '{sum+=$1} END {print sum+0}'
+  )
+  current_mb=$(( (current_bytes + 1048575) / 1048576 ))
+
+  ask_yes_no() {
+    local prompt="$1" ans
+    while true; do
+      read -rp "$prompt (y/n): " ans
+      case "${ans,,}" in
+        y|yes|1) return 0 ;;
+        n|no|0) return 1 ;;
+        *) echo "Please enter y or n." ;;
+      esac
+    done
+  }
+
+  create_swapfile() {
+    local path="$1"
+    local size_mb="$2"
+
+    # Disable all active swap before recreating
+    swapoff -a 2>/dev/null || true
+
+    rm -f "$path"
+
+    if command -v fallocate >/dev/null 2>&1; then
+      if ! fallocate -l "${size_mb}M" "$path" 2>/dev/null; then
+        dd if=/dev/zero of="$path" bs=1M count="$size_mb" status=progress || return 1
+      fi
+    else
+      dd if=/dev/zero of="$path" bs=1M count="$size_mb" status=progress || return 1
+    fi
+
+    chmod 600 "$path" || return 1
+    mkswap "$path" >/dev/null || return 1
+    swapon "$path" || return 1
+
+    # Persist in fstab
+    sed -i.bak "\|^$path none swap|d" /etc/fstab
+    echo "$path none swap sw 0 0" >> /etc/fstab
+
+    echo "Swap enabled: ${size_mb} MB"
+    swapon --show
+  }
+
+  if (( current_bytes > 0 )); then
+    echo "Swap is already active."
+    echo "Current swap size: ${current_mb} MB"
+
+    if ask_yes_no "Do you want to change the swap size?"; then
+      while true; do
+        read -rp "Enter new swap size in MB: " new_mb
+        if [[ "$new_mb" =~ ^[0-9]+$ ]] && (( new_mb > 0 )); then
+          break
+        fi
+        echo "Please enter a valid number greater than 0."
+      done
+
+      create_swapfile "$swap_path" "$new_mb"
+    else
+      echo "No changes made."
+    fi
+  else
+    echo "Swap is not active."
+
+    if ask_yes_no "Do you want to enable swap?"; then
+      while true; do
+        read -rp "Enter swap size in MB: " new_mb
+        if [[ "$new_mb" =~ ^[0-9]+$ ]] && (( new_mb > 0 )); then
+          break
+        fi
+        echo "Please enter a valid number greater than 0."
+      done
+
+      create_swapfile "$swap_path" "$new_mb"
+    else
+      echo "Swap was not enabled."
+    fi
+  fi
+}
+
 ensure_go() {
   local current_version=""
 
@@ -155,6 +248,9 @@ process_domain() {
 
   sleep 1
 }
+
+echo "=> Checking Swap ..."
+manage_swap
 
 echo "=> Checking Go ..."
 ensure_go
